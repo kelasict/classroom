@@ -7,6 +7,6 @@
    https://script.google.com/a/macros/domain-sekolah.id/s/AKfycbxxxxxxxx/exec
    ============================================================ */
 const CONFIG = {
-  API_URL: 'https://script.google.com/macros/s/AKfycbyK1oVtVCt_1Dzimd_gEEd_ta8Drze3GiaYyvr7x0GX8qpc8mmv35muwlO975Zbk-zO/exec',
+  API_URL: 'GANTI_DENGAN_URL_WEB_APP_APPS_SCRIPT',
   APP_NAME: 'ClassRoom Lite'
 };
