@@ -542,7 +542,7 @@ function pageDashboard() {
     { label: 'Total Tugas', value: d.assignments.length, icon: 'tasks', t: 'butter', cap: 'Tugas dibuat', href: '#/tugas' },
     { label: 'Belum Dinilai', value: ungraded, icon: 'grade', t: 'sky', cap: ungraded ? 'Menunggu penilaianmu' : 'Semua sudah dinilai', href: '#/penilaian' }
   ];
-  const recent = d.submissions.slice(0, 5);
+  const recent = d.submissions.filter(s => s.submitted_at).slice(0, 5);
   const first = ME.nama.replace(/^(Bu|Pak|Ibu|Bapak)\s+/i, '').split(' ')[0];
 
   // Grafik batang: jumlah pengumpulan per kelas
@@ -804,7 +804,7 @@ async function openAssignmentDetail(id) {
   async function load() {
     try {
       const res = await API.call('getAssignmentStatus', { assignment_id: id });
-      const done = res.students.filter(s => s.submission).length;
+      const done = res.students.filter(s => s.submission && s.submission.submitted_at).length;
       m.body.innerHTML =
         '<div class="mb-4 text-sm"><p class="text-gray-500 mb-1">' + UI.esc(a.nama_kelas) + ' · Deadline ' + UI.fmtDateTime(a.deadline) + '</p>' +
         (a.deskripsi ? '<p class="pre-wrap mb-2">' + UI.esc(a.deskripsi) + '</p>' : '') +
@@ -815,19 +815,20 @@ async function openAssignmentDetail(id) {
             const sub = s.submission;
             let badge = '<span class="badge badge-gray">Belum mengumpulkan</span>';
             if (sub) {
-              const late = new Date(sub.submitted_at) > new Date(a.deadline);
+              const late = sub.submitted_at && new Date(sub.submitted_at) > new Date(a.deadline);
               badge = sub.nilai !== null ? '<span class="badge badge-green">Dinilai</span>' : '<span class="badge badge-blue">Sudah mengumpulkan</span>';
+              if (!sub.submitted_at) badge = sub.nilai !== null ? '<span class="badge badge-green">Dinilai guru</span> <span class="badge badge-gray">Belum mengumpulkan</span>' : badge;
               if (late) badge += ' <span class="badge badge-yellow">Terlambat</span>';
             }
             return '<tr><td><div class="flex items-center gap-2">' + UI.avatar(s.nama, '', s.foto_url) + '<div><div>' + UI.esc(s.nama) + '</div><div class="text-xs text-gray-500">' + UI.esc(s.email) + '</div></div></div></td>' +
               '<td>' + badge + '</td><td>' + (sub ? UI.fmtDateTime(sub.submitted_at) : '-') + '</td><td>' + (sub && sub.nilai !== null ? '<b>' + sub.nilai + '</b>' : '-') + '</td>' +
-              '<td>' + (sub ? '<button class="btn btn-outline btn-sm" data-act="grade" data-id="' + s.siswa_id + '">' + (sub.nilai === null ? 'Nilai' : 'Ubah') + '</button>' : '') + '</td></tr>';
+              '<td><button class="btn btn-outline btn-sm" data-act="grade" data-id="' + s.siswa_id + '">' + (sub && sub.nilai !== null ? 'Ubah' : 'Nilai') + '</button></td></tr>';
           }).join('') + '</tbody></table></div>' : UI.empty('Belum ada siswa', 'Belum ada siswa yang bergabung di kelas ini.'));
 
       bind(m.body, {
         grade: sid => {
           const st = res.students.find(x => x.siswa_id === sid);
-          openGradeModal(Object.assign({}, st.submission, { siswa_nama: st.nama, assignment_judul: a.judul, deadline: a.deadline, nama_kelas: a.nama_kelas }), async () => { await refresh(); load(); });
+          openGradeModal(Object.assign({ assignment_id: a.id, siswa_id: st.siswa_id }, st.submission, { siswa_nama: st.nama, assignment_judul: a.judul, deadline: a.deadline, nama_kelas: a.nama_kelas }), async () => { await refresh(); load(); });
         }
       });
     } catch (e) {
@@ -843,7 +844,7 @@ function openGradeModal(sub, onDone) {
   const m = UI.modal({
     title: 'Penilaian — ' + sub.siswa_nama, size: 'lg',
     body: '<div class="text-sm mb-3"><p><b>' + UI.esc(sub.assignment_judul) + '</b> · ' + UI.esc(sub.nama_kelas) + '</p>' +
-      '<p class="text-gray-500">Dikumpulkan ' + UI.fmtDateTime(sub.submitted_at) + (late ? ' <span class="badge badge-yellow">Terlambat</span>' : '') + '</p></div>' +
+      (sub.submitted_at ? '<p class="text-gray-500">Dikumpulkan ' + UI.fmtDateTime(sub.submitted_at) + (late ? ' <span class="badge badge-yellow">Terlambat</span>' : '') + '</p>' : '<p class="text-gray-500"><span class="badge badge-gray">Belum mengumpulkan</span> Nilai diberikan langsung oleh guru (mis. tugas kelompok atau dikumpulkan di luar aplikasi).</p>') + '</div>' +
       '<div class="answer-box p-3 mb-3 text-sm"><p class="label">Jawaban siswa</p>' +
       (sub.jawaban ? '<p class="pre-wrap">' + UI.esc(sub.jawaban) + '</p>' : '<p class="text-gray-400">(tidak ada jawaban teks)</p>') +
       (UI.url(sub.file_url) ? '<p class="mt-2"><a href="' + UI.esc(UI.url(sub.file_url)) + '" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1">' + icon('external', 'w-4 h-4') + ' Buka file / link jawaban</a></p>' : '') + '</div>' +
@@ -859,7 +860,7 @@ function openGradeModal(sub, onDone) {
     if (!form.reportValidity()) return;
     UI.busy(btn, true);
     try {
-      await API.call('gradeSubmission', { submission_id: sub.id, nilai: m.el.querySelector('#g-nilai').value, feedback: m.el.querySelector('#g-fb').value });
+      await API.call('gradeSubmission', { submission_id: sub.id || '', assignment_id: sub.assignment_id, siswa_id: sub.siswa_id, nilai: m.el.querySelector('#g-nilai').value, feedback: m.el.querySelector('#g-fb').value });
       UI.toast('Nilai tersimpan');
       m.close();
       if (onDone) await onDone(); else await refresh();
@@ -995,8 +996,8 @@ function pageBukuNilai() {
     const head = '<tr><th class="c-no">No</th><th class="c-nm">Nama Siswa</th>' + b.tasks.map(t =>
       '<th class="c-as" title="' + UI.esc(t.judul) + '"><span class="t">' + UI.esc(t.judul) + '</span><span class="d">' + UI.fmtDate(t.deadline) + '</span></th>').join('') + '<th class="c-avg">Rata-rata</th></tr>';
     const body = b.rows.map((r, i) => '<tr><td class="c-no">' + (i + 1) + '</td><td class="c-nm"><div class="flex items-center gap-2">' + UI.avatar(r.st.nama, '', r.st.foto_url) + '<span>' + UI.esc(r.st.nama) + '</span></div></td>' +
-      r.cells.map(x => {
-        if (!x) return '<td class="cell none" title="Belum mengumpulkan">&mdash;</td>';
+      r.cells.map((x, ci) => {
+        if (!x) return '<td class="cell none" data-act="cell" data-id="NEW|' + b.tasks[ci].id + '|' + r.st.siswa_id + '" title="Belum mengumpulkan - klik untuk memberi nilai">&mdash;</td>';
         if (x.nilai === null || x.nilai === undefined) return '<td class="cell wait" data-act="cell" data-id="' + x.id + '" title="Klik untuk menilai">Belum dinilai</td>';
         const n = Number(x.nilai);
         return '<td class="cell ' + (n < 60 ? 'lo' : n >= 85 ? 'hi' : '') + '" data-act="cell" data-id="' + x.id + '" title="Klik untuk mengubah nilai">' + fmtNum(n) + '</td>';
@@ -1022,6 +1023,13 @@ function pageBukuNilai() {
   $('#bn-xls').addEventListener('click', () => exportExcel(books));
   bind($('#bn-body'), {
     cell: id => {
+      if (id.indexOf('NEW|') === 0) {            // siswa belum mengumpulkan: nilai langsung
+        const p = id.split('|'), a = D().assignments.find(x => x.id === p[1]);
+        const st = a && D().students.find(x => x.siswa_id === p[2] && x.class_id === a.class_id);
+        const c = a && D().classes.find(x => x.id === a.class_id);
+        if (a && st) openGradeModal({ assignment_id: a.id, siswa_id: st.siswa_id, siswa_nama: st.nama, assignment_judul: a.judul, deadline: a.deadline, nama_kelas: c ? c.nama_kelas : '' });
+        return;
+      }
       const sub = D().submissions.find(s => s.id === id);
       if (sub) openGradeModal(sub);
     }
@@ -1634,7 +1642,8 @@ function openAssignment(id) {
     body = header + '<div class="notice-grade mb-3"><p class="text-sm ">Nilai kamu</p>' +
       '<p class="text-4xl font-medium ">' + sub.nilai + '<span class="text-lg text-gray-500">/100</span></p></div>' +
       '<div class="mb-3"><p class="label">Feedback guru</p><p class="text-sm pre-wrap">' + (sub.feedback ? UI.esc(sub.feedback) : '<span class="text-gray-400">Tidak ada feedback.</span>') + '</p></div>' +
-      '<div class="answer-box p-4 text-sm"><p class="label">Jawabanmu (dikumpulkan ' + UI.fmtDateTime(sub.submitted_at) + ')</p>' +
+      (sub.submitted_at ? '<div class="answer-box p-4 text-sm"><p class="label">Jawabanmu (dikumpulkan ' + UI.fmtDateTime(sub.submitted_at) + ')</p>' :
+        '<div class="answer-box p-4 text-sm"><p class="label">Nilai diberikan langsung oleh guru</p>') +
       (sub.jawaban ? '<p class="pre-wrap">' + UI.esc(sub.jawaban) + '</p>' : '') +
       (UI.url(sub.file_url) ? '<p class="mt-1"><a href="' + UI.esc(UI.url(sub.file_url)) + '" target="_blank" rel="noopener noreferrer">Buka file / link jawaban</a></p>' : '') + '</div>' +
       '<div class="flex justify-end mt-4"><button class="btn btn-primary" data-close>Tutup</button></div>';
